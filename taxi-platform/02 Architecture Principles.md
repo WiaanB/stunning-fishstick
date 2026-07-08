@@ -10,6 +10,6 @@ Core values: **Domain-Driven Design (DDD)**, **event-driven architecture**, stro
 - Mock clients (`cmd/mockclient/`) enable load testing without requiring real mobile apps
 
 ## Related
-- [[03 Domain - Trip State Machine]]
-- [[04 Backend Scaffolding]]
-- [[08 Learnings and Principles]]
+- [[Trip State Machine]]
+- [[Backend Scaffolding]]
+- [[03 Learnings and Principles]]

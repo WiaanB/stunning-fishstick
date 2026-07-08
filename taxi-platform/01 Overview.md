@@ -18,4 +18,4 @@ Monorepo with four apps (passenger, driver, fleet dashboard, backend API) + shar
 - **Payments**: PayShap
 - **Infra pattern**: Monorepo with shared packages
 
-See [[02 Architecture Principles]], [[04 Backend Scaffolding]], [[05 Roadmap]].
+See [[02 Architecture Principles]], [[Backend Scaffolding]], [[Roadmap]].

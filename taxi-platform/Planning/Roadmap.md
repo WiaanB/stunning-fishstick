@@ -11,8 +11,8 @@ Agreed build sequence:
 7. Layering in fleet dashboard, multi-seat, and translations
 
 ## Open items
-- Native speaker review needed for several SA language translations — see [[06 Translations]]
-- [[07 Payments]] — PayShap selected as primary rail
+- Native speaker review needed for several SA language translations — see [[Translations]]
+- [[Payments]] — PayShap selected as primary rail, integration not yet started
 
 ## Related
-- [[04 Backend Scaffolding]]
+- [[Backend Scaffolding]]
