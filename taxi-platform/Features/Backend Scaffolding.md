@@ -25,3 +25,4 @@ Actively being scaffolded. `go.mod` present but **no `go.sum`** — run `go mod 
 - [[Trip State Machine]]
 - [[03 Learnings and Principles]] (outbox pattern rationale)
 - [[Roadmap]]
+- [[tdd-rewrite-initiative]]

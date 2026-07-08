@@ -21,3 +21,4 @@ Core domain layer implemented and unit-tested (`internal/trip/domain_test.go`). 
 ## Related
 - [[Backend Scaffolding]]
 - [[Roadmap]]
+- [[tdd-rewrite-initiative]]

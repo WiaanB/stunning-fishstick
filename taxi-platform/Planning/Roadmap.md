@@ -13,6 +13,8 @@ Agreed build sequence:
 ## Open items
 - Native speaker review needed for several SA language translations — see [[Translations]]
 - [[Payments]] — PayShap selected as primary rail, integration not yet started
+- TDD rewrite of the existing backend packages (trip domain, eventbus, postgres platform,
+  cmd/api, cmd/mockclient) — see [[tdd-rewrite-initiative]]
 
 ## Related
 - [[Backend Scaffolding]]
