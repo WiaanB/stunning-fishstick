@@ -1,6 +1,7 @@
 # TDD Rewrite: internal/trip
-Status: Raised
+Status: Done
 Date: 2026-07-08
+Completed: 2026-07-15
 
 ## TLDR
 Delete `internal/trip/{domain.go,events.go,service.go}` and rebuild the trip aggregate, its
@@ -41,6 +42,17 @@ Requirements to preserve (today's observable behavior):
   `RequestTrip`, `MarkNoShow` — untested today (the existing `fakeRepo.FindByID` always errors).
 - **Out of scope**: exposing the other 7 domain transitions at the service layer — that's
   Roadmap step 1 (HTTP handlers), not this rewrite.
+
+## Resolution
+- VerifyCode now checks `CanTransition` before comparing codes (illegal-state calls surface as a
+  transition error, consistent with every other transition method).
+- `TripStarted.EventType()` renamed to `"trip.started"`, matching the struct name.
+- `Repository.Save(ctx, t)` takes ownership of persisting the trip row and draining/persisting its
+  pending events in one call; `EventPublisher` dropped from `Service`'s write path entirely (no
+  external code referenced it, confirmed before removing).
+- Added `Service.RequestTrip`/`Service.MarkNoShow` tests via a hand-rolled fake `Repository`
+  (`internal/trip/service_test.go`); split tests into `domain_test.go`, `events_test.go`,
+  `service_test.go` matching the TDD skill's per-source-file convention.
 
 ## Related
 - [[tdd-rewrite-initiative]]

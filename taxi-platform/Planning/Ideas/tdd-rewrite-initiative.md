@@ -1,5 +1,5 @@
 # TDD Rewrite of Existing Backend Packages
-Status: Raised
+Status: In Progress
 Date: 2026-07-08
 
 ## TLDR
@@ -16,15 +16,16 @@ implementation, not of contracts — HTTP-visible behavior, event shapes, and ta
 the same unless a ticket says otherwise.
 
 Recommended sequencing:
-1. [[tdd-rewrite-eventbus]] and [[tdd-rewrite-trip-domain]] first — no external dependencies,
-   straightforward unit testing, nothing else blocks on a decision.
-2. [[tdd-rewrite-cmd-mockclient]] next — also dependency-free, `httptest`-friendly.
-3. [[tdd-rewrite-cmd-api]] — partially testable via `httptest`, partially needs the wiring
-   decomposed to be testable at all; depends on the eventbus/postgres interfaces being settled.
-4. [[tdd-rewrite-postgres-platform]] last — **blocked** on deciding a Postgres integration-test
-   strategy first (no test DB or CI wired up in this repo yet). The TDD skill explicitly treats
-   this as "an open item rather than skipping tests silently or inventing tooling that doesn't
-   exist in this repo" — that decision belongs to the user, not this initiative.
+1. **Done** — [[tdd-rewrite-eventbus]] and [[tdd-rewrite-trip-domain]], no external dependencies,
+   straightforward unit testing, nothing else blocked on a decision.
+2. **Done** — [[tdd-rewrite-cmd-mockclient]], also dependency-free, `httptest`-friendly.
+3. [[tdd-rewrite-cmd-api]] next — partially testable via `httptest`, partially needs the wiring
+   decomposed to be testable at all. Its own ticket depends on postgres/eventbus interfaces being
+   settled; eventbus is done, and since the postgres-platform rewrite is scoped as test-coverage
+   only (no interface changes), cmd/api can reasonably proceed before wave 4 rather than waiting
+   on it — confirm this reading when cmd/api's turn comes.
+4. [[tdd-rewrite-postgres-platform]] last — Postgres integration-test strategy decided:
+   `testcontainers-go` (real disposable Postgres per test run). Implementation still open.
 
 ## Related
 - [[tdd-rewrite-trip-domain]]

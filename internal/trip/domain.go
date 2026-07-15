@@ -101,8 +101,8 @@ func (t *Trip) record(e Event) {
 }
 
 // PendingEvents returns and clears the events accumulated since the last
-// call. The service layer persists these to the outbox in the same
-// transaction as the trip row write.
+// call. Repository implementations drain these in the same call that
+// persists the trip row, so both land in the outbox atomically.
 func (t *Trip) PendingEvents() []Event {
 	events := t.pending
 	t.pending = nil

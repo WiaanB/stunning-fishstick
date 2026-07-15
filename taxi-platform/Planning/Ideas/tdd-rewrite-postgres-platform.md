@@ -8,11 +8,11 @@ deciding a Postgres integration-test strategy first, since this repo has no test
 wired up yet.
 
 ## Details
-**Prerequisite**: before red-green-refactor can start here, decide how this package gets tested
-against a real Postgres (e.g. `testcontainers-go`, a local docker-compose Postgres, or similar).
-That's a tooling decision for the user to make — the TDD skill explicitly says to treat this gap
-as an open item rather than inventing tooling unilaterally. Sequence this ticket after that
-decision, and after [[tdd-rewrite-eventbus]] and [[tdd-rewrite-trip-domain]].
+**Prerequisite — decided 2026-07-15**: this package will be tested against a real Postgres via
+`testcontainers-go` (a disposable container per test run, no manually-managed shared instance,
+CI-ready later without extra setup). Not implemented yet — this only unblocks starting the
+red-green-refactor loop here. Sequenced after [[tdd-rewrite-eventbus]] and
+[[tdd-rewrite-trip-domain]] (both done) and [[tdd-rewrite-cmd-mockclient]] (done).
 
 Requirements to preserve:
 - `pool.go`: `NewPool(ctx, dsn) (*pgxpool.Pool, error)` — opens a pool, pings it, closes the pool

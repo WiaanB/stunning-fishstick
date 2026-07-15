@@ -1,6 +1,7 @@
 # TDD Rewrite: cmd/mockclient
-Status: Raised
+Status: Done
 Date: 2026-07-08
+Completed: 2026-07-15
 
 ## TLDR
 Delete and rebuild `cmd/mockclient/main.go` test-first — it's untested today, and its own
@@ -24,6 +25,12 @@ Testing approach: `ping` and `loop` have no real external dependency beyond an H
 they're directly testable with `httptest.NewServer`. Write failing tests first for `ping`'s
 success/non-200/transport-error paths and `loop`'s tick/cancel behavior (short intervals, a
 cancelled context) before rebuilding.
+
+## Resolution
+Rebuilt test-first in `cmd/mockclient/main_test.go`: `httptest`-based coverage for `ping`
+(success/non-200/transport-error) and `loop` (tick-until-cancel, already-cancelled context), plus
+`simulatePassenger`/`simulateDriver` exercised against a real `httptest.Server`. All flags,
+goroutine wiring, and the ping-only stub behavior preserved unchanged.
 
 ## Related
 - [[tdd-rewrite-initiative]]

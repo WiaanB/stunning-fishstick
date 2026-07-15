@@ -1,6 +1,7 @@
 package trip
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -74,12 +75,15 @@ type TripCodeVerified struct {
 func (e TripCodeVerified) EventType() string      { return "trip.code_verified" }
 func (e TripCodeVerified) AggregateID() uuid.UUID { return e.TripID }
 
+// TripStarted is emitted when a trip moves into InProgress. Its EventType
+// matches the struct name ("trip.started") — previously this emitted
+// "trip.in_progress", a naming mismatch fixed during the TDD rewrite.
 type TripStarted struct {
 	TripID     uuid.UUID
 	OccurredAt time.Time
 }
 
-func (e TripStarted) EventType() string      { return "trip.in_progress" }
+func (e TripStarted) EventType() string      { return "trip.started" }
 func (e TripStarted) AggregateID() uuid.UUID { return e.TripID }
 
 type TripCompleted struct {
@@ -147,7 +151,14 @@ func (t *Trip) MarkEnRoute() error {
 	return t.transition(StateEnRoute, TripEnRoute{TripID: t.ID, OccurredAt: now})
 }
 
+// VerifyCode checks the transition is legal before comparing the presented
+// code, consistent with every other transition method gating on
+// CanTransition first — an illegal-state call surfaces as a transition
+// error rather than a misleading CodeMismatchError.
 func (t *Trip) VerifyCode(code string) error {
+	if !CanTransition(t.State, StateCodeVerified) {
+		return fmt.Errorf("trip: illegal transition %s -> %s", t.State, StateCodeVerified)
+	}
 	if code != t.Code {
 		return &CodeMismatchError{TripID: t.ID}
 	}

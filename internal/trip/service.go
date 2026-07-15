@@ -11,6 +11,12 @@ import (
 // implementation (sqlc-generated queries over Postgres, per docs/05
 // Roadmap) lives outside this package; the domain only depends on this
 // interface.
+//
+// Save takes ownership of persisting both the trip row and the events
+// accumulated on it since the last save (via t.PendingEvents()) as a single
+// atomic unit — e.g. one row write plus one outbox insert in the same DB
+// transaction. There is no separate publish step, so no real implementation
+// can persist one without the other.
 type Repository interface {
 	Save(ctx context.Context, t *Trip) error
 	FindByID(ctx context.Context, id uuid.UUID) (*Trip, error)
@@ -19,23 +25,14 @@ type Repository interface {
 	InProgressSeatCount(ctx context.Context, vehicleID uuid.UUID) (int, error)
 }
 
-// EventPublisher hands domain events to the outbox for durable, at-least-
-// once dispatch. See internal/platform/postgres/outbox.go.
-type EventPublisher interface {
-	Publish(ctx context.Context, events ...Event) error
-}
-
 // Service is the application-layer entry point for trip commands: it loads
-// state, invokes the domain method, and persists the resulting state and
-// events atomically (repository implementations are expected to wrap
-// Save + Publish in a single DB transaction).
+// state, invokes the domain method, and persists the result via Repository.
 type Service struct {
-	repo   Repository
-	events EventPublisher
+	repo Repository
 }
 
-func NewService(repo Repository, events EventPublisher) *Service {
-	return &Service{repo: repo, events: events}
+func NewService(repo Repository) *Service {
+	return &Service{repo: repo}
 }
 
 // OccupancyFloorError is returned when a manual occupancy adjustment would
@@ -73,29 +70,14 @@ func (s *Service) AdjustOccupancy(ctx context.Context, vehicleID uuid.UUID, newO
 	return nil
 }
 
-// apply persists the trip and dispatches its pending events as a single
-// unit of work.
-func (s *Service) apply(ctx context.Context, t *Trip) error {
-	events := t.PendingEvents()
-	if err := s.repo.Save(ctx, t); err != nil {
-		return fmt.Errorf("trip: save: %w", err)
-	}
-	if len(events) > 0 {
-		if err := s.events.Publish(ctx, events...); err != nil {
-			return fmt.Errorf("trip: publish events: %w", err)
-		}
-	}
-	return nil
-}
-
 // RequestTrip starts a new trip for the given seat count.
 func (s *Service) RequestTrip(ctx context.Context, seatCount int) (*Trip, error) {
 	t, err := NewTrip(seatCount)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.apply(ctx, t); err != nil {
-		return nil, err
+	if err := s.repo.Save(ctx, t); err != nil {
+		return nil, fmt.Errorf("trip: save: %w", err)
 	}
 	return t, nil
 }
@@ -111,5 +93,8 @@ func (s *Service) MarkNoShow(ctx context.Context, tripID uuid.UUID) error {
 	if err := t.MarkNoShow(); err != nil {
 		return err
 	}
-	return s.apply(ctx, t)
+	if err := s.repo.Save(ctx, t); err != nil {
+		return fmt.Errorf("trip: save: %w", err)
+	}
+	return nil
 }

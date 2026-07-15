@@ -21,7 +21,7 @@ The Go backend's foundational infrastructure — package layout, the async event
 ## Status
 Actively being scaffolded. `go.mod` present but **no `go.sum`** — run `go mod tidy` locally.
 
-Event bus TDD rewrite completed.
+Event bus, trip domain, and `cmd/mockclient` TDD rewrites completed. `internal/platform/postgres` and `cmd/api` rewrites still open — see [[tdd-rewrite-initiative]].
 
 ## Related
 - [[Trip State Machine]]

@@ -1,7 +1,6 @@
 package trip
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -54,47 +53,37 @@ func TestVerifyCodeMismatch(t *testing.T) {
 	_ = tr.AssignDriver(uuid.New())
 	_ = tr.MarkEnRoute()
 
-	if err := tr.VerifyCode("WRONG"); err == nil {
-		t.Fatal("expected code mismatch error")
+	err := tr.VerifyCode("WRONG")
+	var mismatchErr *CodeMismatchError
+	if !errors.As(err, &mismatchErr) {
+		t.Fatalf("expected *CodeMismatchError, got %T: %v", err, err)
 	}
 	if tr.State != StateEnRoute {
 		t.Fatalf("state should be unchanged after failed verification, got %s", tr.State)
 	}
 }
 
-// fakeRepo backs the occupancy invariant test; only InProgressSeatCount is
-// exercised by Service.AdjustOccupancy.
-type fakeRepo struct {
-	inProgressSeats int
-}
-
-func (f *fakeRepo) Save(ctx context.Context, t *Trip) error { return nil }
-func (f *fakeRepo) FindByID(ctx context.Context, id uuid.UUID) (*Trip, error) {
-	return nil, errors.New("not implemented in fakeRepo")
-}
-func (f *fakeRepo) InProgressSeatCount(ctx context.Context, vehicleID uuid.UUID) (int, error) {
-	return f.inProgressSeats, nil
-}
-
-type fakePublisher struct{}
-
-func (fakePublisher) Publish(ctx context.Context, events ...Event) error { return nil }
-
-func TestOccupancyFloorInvariant(t *testing.T) {
-	ctx := context.Background()
-	vehicleID := uuid.New()
-	svc := NewService(&fakeRepo{inProgressSeats: 3}, fakePublisher{})
-
-	if err := svc.AdjustOccupancy(ctx, vehicleID, 3); err != nil {
-		t.Fatalf("occupancy at the floor should be allowed: %v", err)
+// TestVerifyCodeIllegalStateTakesPrecedence pins down that VerifyCode checks
+// CanTransition before comparing codes, consistent with every other
+// transition method — an illegal-state call surfaces as a transition error
+// even when the presented code is also wrong, rather than masking the real
+// problem behind a CodeMismatchError.
+func TestVerifyCodeIllegalStateTakesPrecedence(t *testing.T) {
+	tr, err := NewTrip(1)
+	if err != nil {
+		t.Fatalf("NewTrip: %v", err)
 	}
-
-	err := svc.AdjustOccupancy(ctx, vehicleID, 2)
+	// Fresh trip is Requested; VerifyCode (-> CodeVerified) is illegal from
+	// here regardless of the code, and no code has been issued yet either.
+	err = tr.VerifyCode("WRONG")
 	if err == nil {
-		t.Fatal("expected OccupancyFloorError dropping below committed in-progress seats")
+		t.Fatal("expected an error verifying code from Requested state")
 	}
-	var floorErr *OccupancyFloorError
-	if !errors.As(err, &floorErr) {
-		t.Fatalf("expected *OccupancyFloorError, got %T: %v", err, err)
+	var mismatchErr *CodeMismatchError
+	if errors.As(err, &mismatchErr) {
+		t.Fatalf("expected a transition error, not *CodeMismatchError: %v", err)
+	}
+	if tr.State != StateRequested {
+		t.Fatalf("state should be unchanged, got %s", tr.State)
 	}
 }
