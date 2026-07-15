@@ -1,16 +1,15 @@
-// Package eventbus provides an in-process, async worker-pool event bus.
-// It implements trip.EventPublisher directly so the domain layer only ever
-// depends on an interface; today's in-process bus can be swapped for a
-// NATS or Kafka-backed one later without touching callers. See docs/02
-// Architecture Principles and docs/08 Learnings and Principles.
 package eventbus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
 )
+
+// ErrBusClosed is returned by Publish after the bus has been closed.
+var ErrBusClosed = errors.New("eventbus: bus closed")
 
 // Event mirrors trip.Event's shape without importing the trip package, so
 // this package stays a leaf dependency usable by any domain.
@@ -32,6 +31,8 @@ type Bus struct {
 	mu           sync.RWMutex
 	queue        chan job
 	wg           sync.WaitGroup
+	closed       bool
+	errMu        sync.Mutex
 	errorHandler func(eventType string, err error)
 }
 
@@ -52,7 +53,7 @@ func WithErrorHandler(fn func(eventType string, err error)) Option {
 
 // New starts a Bus with the given number of worker goroutines consuming
 // from a buffered queue.
-func New(workers, queueSize int) *Bus {
+func New(workers, queueSize int, opts ...Option) *Bus {
 	if workers < 1 {
 		workers = 1
 	}
@@ -65,6 +66,9 @@ func New(workers, queueSize int) *Bus {
 	}
 	b.errorHandler = func(eventType string, err error) {
 		log.Printf("eventbus: handler error for %s: %v", eventType, err)
+	}
+	for _, opt := range opts {
+		opt(b)
 	}
 	for i := 0; i < workers; i++ {
 		b.wg.Add(1)
@@ -101,8 +105,16 @@ func (b *Bus) Subscribe(eventType string, h Handler) {
 }
 
 // Publish enqueues events for async dispatch. It blocks only if the queue
-// is full, which is treated as backpressure rather than an error.
+// is full, which is treated as backpressure rather than an error. After the
+// bus has been closed, Publish returns ErrBusClosed.
 func (b *Bus) Publish(ctx context.Context, events ...Event) error {
+	b.errMu.Lock()
+	if b.closed {
+		b.errMu.Unlock()
+		return ErrBusClosed
+	}
+	b.errMu.Unlock()
+
 	for _, e := range events {
 		select {
 		case b.queue <- job{ctx: ctx, event: e}:
@@ -114,8 +126,16 @@ func (b *Bus) Publish(ctx context.Context, events ...Event) error {
 }
 
 // Close stops accepting new events and waits for in-flight handlers to
-// finish. Safe to call once during shutdown.
+// finish. Safe to call multiple times; subsequent calls are no-ops.
 func (b *Bus) Close() {
+	b.errMu.Lock()
+	if b.closed {
+		b.errMu.Unlock()
+		return
+	}
+	b.closed = true
+	b.errMu.Unlock()
+
 	close(b.queue)
 	b.wg.Wait()
 }
