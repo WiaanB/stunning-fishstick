@@ -30,8 +30,35 @@ func TestHappyPathTransitions(t *testing.T) {
 	if tr.State != StateCompleted {
 		t.Fatalf("expected Completed, got %s", tr.State)
 	}
-	if got, want := len(tr.PendingEvents()), len(steps)+1; got != want { // +1 for the initial TripRequested event
+	if got, want := len(tr.Events()), len(steps)+1; got != want { // +1 for the initial TripRequested event
 		t.Fatalf("expected %d pending events, got %d", want, got)
+	}
+}
+
+// TestEventsDoesNotClearPending pins that Events() is a non-destructive peek:
+// a caller that reads events before persistence and then fails to commit must
+// still see them on the next read, so a retried save doesn't silently drop
+// them.
+func TestEventsDoesNotClearPending(t *testing.T) {
+	tr, err := NewTrip(1)
+	if err != nil {
+		t.Fatalf("NewTrip: %v", err)
+	}
+	first := tr.Events()
+	second := tr.Events()
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("expected Events() to return the same pending events on repeated calls, got %d then %d", len(first), len(second))
+	}
+}
+
+func TestClearEventsEmptiesPending(t *testing.T) {
+	tr, err := NewTrip(1)
+	if err != nil {
+		t.Fatalf("NewTrip: %v", err)
+	}
+	tr.ClearEvents()
+	if got := len(tr.Events()); got != 0 {
+		t.Fatalf("expected no pending events after ClearEvents, got %d", got)
 	}
 }
 

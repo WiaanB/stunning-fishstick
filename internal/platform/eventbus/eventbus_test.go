@@ -252,6 +252,105 @@ func TestDoubleCloseIsNoOp(t *testing.T) {
 	}
 }
 
+func TestDispatchRunsHandlerSynchronously(t *testing.T) {
+	ctx := context.Background()
+	bus := New(1, 1)
+	defer bus.Close()
+
+	var ran atomic.Bool
+	bus.Subscribe("event.sync", func(_ context.Context, _ Event) error {
+		time.Sleep(20 * time.Millisecond)
+		ran.Store(true)
+		return nil
+	})
+
+	if err := bus.Dispatch(ctx, testEvent{typ: "event.sync"}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if !ran.Load() {
+		t.Fatal("expected the handler to have run before Dispatch returned")
+	}
+}
+
+func TestDispatchReturnsHandlerError(t *testing.T) {
+	ctx := context.Background()
+	bus := New(1, 1)
+	defer bus.Close()
+
+	boomErr := errors.New("boom")
+	bus.Subscribe("event.err", func(_ context.Context, _ Event) error {
+		return boomErr
+	})
+
+	err := bus.Dispatch(ctx, testEvent{typ: "event.err"})
+	if !errors.Is(err, boomErr) {
+		t.Fatalf("expected %v, got %v", boomErr, err)
+	}
+}
+
+func TestDispatchRunsAllSiblingsEvenIfOneErrors(t *testing.T) {
+	ctx := context.Background()
+	bus := New(1, 1)
+	defer bus.Close()
+
+	var secondRan atomic.Bool
+	bus.Subscribe("event.siblings", func(_ context.Context, _ Event) error {
+		return errors.New("boom")
+	})
+	bus.Subscribe("event.siblings", func(_ context.Context, _ Event) error {
+		secondRan.Store(true)
+		return nil
+	})
+
+	if err := bus.Dispatch(ctx, testEvent{typ: "event.siblings"}); err == nil {
+		t.Fatal("expected the first handler's error to surface")
+	}
+	if !secondRan.Load() {
+		t.Fatal("expected the second sibling handler to still run")
+	}
+}
+
+func TestDispatchAfterCloseReturnsErrBusClosed(t *testing.T) {
+	ctx := context.Background()
+	bus := New(1, 1)
+	bus.Close()
+
+	err := bus.Dispatch(ctx, testEvent{typ: "anything"})
+	if !errors.Is(err, ErrBusClosed) {
+		t.Fatalf("expected ErrBusClosed, got %T: %v", err, err)
+	}
+}
+
+func TestPublishCloseRaceDoesNotPanic(t *testing.T) {
+	for iter := 0; iter < 200; iter++ {
+		bus := New(4, 4)
+
+		var wg sync.WaitGroup
+		for i := 0; i < 50; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() {
+					if r := recover(); r != nil {
+						t.Errorf("Publish panicked racing Close: %v", r)
+					}
+				}()
+				if err := bus.Publish(context.Background(), testEvent{typ: "race"}); err != nil && !errors.Is(err, ErrBusClosed) {
+					t.Errorf("unexpected Publish error: %v", err)
+				}
+			}()
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			bus.Close()
+		}()
+
+		wg.Wait()
+	}
+}
+
 func TestPublishAfterCloseReturnsErrBusClosed(t *testing.T) {
 	ctx := context.Background()
 	bus := New(1, 1)

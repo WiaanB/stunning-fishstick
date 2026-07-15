@@ -9,9 +9,9 @@ import (
 )
 
 // fakeRepo is a hand-rolled Repository double. Save records whatever trip
-// and events it was given (draining PendingEvents itself, the way a real
-// implementation would before writing to the outbox) so tests can assert on
-// what got persisted.
+// and events it was given, clearing them only after the simulated persist
+// succeeds (the way a real implementation would clear only after its
+// transaction commits) so tests can assert on what got persisted.
 type fakeRepo struct {
 	inProgressSeats int
 
@@ -28,7 +28,8 @@ func (f *fakeRepo) Save(ctx context.Context, t *Trip) error {
 		return f.saveErr
 	}
 	f.savedTrip = t
-	f.savedEvents = t.PendingEvents()
+	f.savedEvents = t.Events()
+	t.ClearEvents()
 	return nil
 }
 
@@ -83,8 +84,8 @@ func TestRequestTrip(t *testing.T) {
 	if got := repo.savedEvents[0].EventType(); got != "trip.requested" {
 		t.Fatalf("expected trip.requested event, got %s", got)
 	}
-	// PendingEvents was already drained by Save, so a second read must be empty.
-	if got := len(tr.PendingEvents()); got != 0 {
+	// Save already cleared the events, so a second read must be empty.
+	if got := len(tr.Events()); got != 0 {
 		t.Fatalf("expected pending events already drained, got %d", got)
 	}
 }
@@ -99,7 +100,7 @@ func TestMarkNoShow(t *testing.T) {
 	_ = tr.AwaitPayment()
 	_ = tr.IssueCode("A1B2")
 	_ = tr.AssignDriver(uuid.New())
-	tr.PendingEvents() // drain setup events, isolate the assertions below to MarkNoShow
+	tr.ClearEvents() // drain setup events, isolate the assertions below to MarkNoShow
 
 	repo := &fakeRepo{findByIDTrip: tr}
 	svc := NewService(repo)
@@ -125,6 +126,33 @@ func TestMarkNoShowFindByIDError(t *testing.T) {
 
 	if err := svc.MarkNoShow(ctx, uuid.New()); err == nil {
 		t.Fatal("expected error when FindByID fails")
+	}
+}
+
+// TestMarkNoShowFailedSaveLeavesEventsForRetry pins the fix for the
+// destructive-read bug: a Save failure must not have drained tr's events,
+// so retrying MarkNoShow against the same in-memory aggregate can still
+// persist the trip.no_show event rather than silently losing it.
+func TestMarkNoShowFailedSaveLeavesEventsForRetry(t *testing.T) {
+	ctx := context.Background()
+	tr, err := NewTrip(1)
+	if err != nil {
+		t.Fatalf("NewTrip: %v", err)
+	}
+	_ = tr.Quote(1000)
+	_ = tr.AwaitPayment()
+	_ = tr.IssueCode("A1B2")
+	_ = tr.AssignDriver(uuid.New())
+	tr.ClearEvents() // drain setup events, isolate the assertions below to MarkNoShow
+
+	repo := &fakeRepo{findByIDTrip: tr, saveErr: errors.New("boom")}
+	svc := NewService(repo)
+
+	if err := svc.MarkNoShow(ctx, tr.ID); err == nil {
+		t.Fatal("expected error when Save fails")
+	}
+	if got := len(tr.Events()); got != 1 || tr.Events()[0].EventType() != "trip.no_show" {
+		t.Fatalf("expected the trip.no_show event to survive the failed save for retry, got %v", tr.Events())
 	}
 }
 

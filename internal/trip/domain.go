@@ -100,11 +100,18 @@ func (t *Trip) record(e Event) {
 	t.pending = append(t.pending, e)
 }
 
-// PendingEvents returns and clears the events accumulated since the last
-// call. Repository implementations drain these in the same call that
-// persists the trip row, so both land in the outbox atomically.
-func (t *Trip) PendingEvents() []Event {
-	events := t.pending
+// Events returns the events accumulated since the last ClearEvents call,
+// without clearing them. Repository implementations must read via Events,
+// persist the trip row and outbox insert as one transaction, and only call
+// ClearEvents once that transaction has committed — clearing on a read (as
+// opposed to on confirmed success) would drop events for good if the
+// persist then failed and the same aggregate were retried.
+func (t *Trip) Events() []Event {
+	return t.pending
+}
+
+// ClearEvents drops the events accumulated since the last call. Call only
+// after a Repository has confirmed the events were durably persisted.
+func (t *Trip) ClearEvents() {
 	t.pending = nil
-	return events
 }

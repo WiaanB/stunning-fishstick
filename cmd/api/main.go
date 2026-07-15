@@ -121,7 +121,7 @@ func (e outboxEvent) EventType() string { return e.OutboxRecord.EventType }
 
 func publishToBus(bus *eventbus.Bus) postgres.PublishFunc {
 	return func(ctx context.Context, r postgres.OutboxRecord) error {
-		return bus.Publish(ctx, outboxEvent{r})
+		return bus.Dispatch(ctx, outboxEvent{r})
 	}
 }
 

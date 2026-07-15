@@ -23,9 +23,10 @@ var (
 )
 
 // TestMain starts one Postgres container for the whole package's test run
-// (rather than one per test) and applies the real migration file, so the
-// test schema can never drift from migrations/0001_init.sql. If Docker
-// isn't available, tests still run but skip themselves via newTestPool.
+// (rather than one per test) and applies the real migration files, in
+// order, so the test schema can never drift from migrations/*.sql. If
+// Docker isn't available, tests still run but skip themselves via
+// newTestPool.
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
@@ -35,13 +36,17 @@ func TestMain(m *testing.M) {
 	}
 	dockerAvailable = true
 
-	migrationPath, err := filepath.Abs("../../../migrations/0001_init.sql")
+	migration1, err := filepath.Abs("../../../migrations/0001_init.sql")
+	if err != nil {
+		log.Fatalf("postgres: resolve migration path: %v", err)
+	}
+	migration2, err := filepath.Abs("../../../migrations/0002_outbox_ordering.sql")
 	if err != nil {
 		log.Fatalf("postgres: resolve migration path: %v", err)
 	}
 
 	ctr, err := tcpostgres.Run(ctx, "postgres:16-alpine",
-		tcpostgres.WithInitScripts(migrationPath),
+		tcpostgres.WithInitScripts(migration1, migration2),
 		tcpostgres.BasicWaitStrategies(),
 	)
 	if err != nil {

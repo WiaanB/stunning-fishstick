@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,10 +14,15 @@ import (
 
 func insertOutboxRow(t *testing.T, pool *pgxpool.Pool, eventType string, createdAt time.Time) uuid.UUID {
 	t.Helper()
+	return insertOutboxRowForAggregate(t, pool, uuid.New(), eventType, createdAt)
+}
+
+func insertOutboxRowForAggregate(t *testing.T, pool *pgxpool.Pool, aggregateID uuid.UUID, eventType string, createdAt time.Time) uuid.UUID {
+	t.Helper()
 	id := uuid.New()
 	_, err := pool.Exec(context.Background(),
 		`INSERT INTO outbox_events (id, aggregate_id, event_type, payload, created_at) VALUES ($1, $2, $3, $4, $5)`,
-		id, uuid.New(), eventType, []byte(`{}`), createdAt,
+		id, aggregateID, eventType, []byte(`{}`), createdAt,
 	)
 	if err != nil {
 		t.Fatalf("insert outbox row: %v", err)
@@ -175,6 +181,234 @@ func TestPollOnceLeavesFailedRecordsUndispatchedAndContinues(t *testing.T) {
 	}
 	assertDispatched(t, pool, failID, false)
 	assertDispatched(t, pool, okID, true)
+}
+
+// TestPollOnceDoesNotMarkDispatchedUntilHandlerCompletes pins the fix for
+// the ack-before-handler-completion bug: dispatched_at must stay NULL while
+// publish (which now runs the handler synchronously) is still in flight.
+func TestPollOnceDoesNotMarkDispatchedUntilHandlerCompletes(t *testing.T) {
+	pool := newTestPool(t)
+	id := insertOutboxRow(t, pool, "trip.requested", time.Now().UTC())
+
+	handlerStarted := make(chan struct{})
+	release := make(chan struct{})
+	publish := func(ctx context.Context, r OutboxRecord) error {
+		close(handlerStarted)
+		<-release
+		return nil
+	}
+	d := NewDispatcher(pool, publish, 100, time.Second)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := d.pollOnce(context.Background()); err != nil {
+			t.Errorf("pollOnce: %v", err)
+		}
+	}()
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	assertDispatched(t, pool, id, false)
+
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("pollOnce did not return after handler completed")
+	}
+
+	assertDispatched(t, pool, id, true)
+}
+
+// TestPollOnceRetriesFailedRecordOnNextPoll pins that a handler failure
+// leaves the row immediately retryable (claim released), not stuck behind
+// a lease timeout.
+func TestPollOnceRetriesFailedRecordOnNextPoll(t *testing.T) {
+	pool := newTestPool(t)
+	id := insertOutboxRow(t, pool, "trip.requested", time.Now().UTC())
+
+	var attempt int32
+	publish := func(ctx context.Context, r OutboxRecord) error {
+		if atomic.AddInt32(&attempt, 1) == 1 {
+			return errors.New("boom")
+		}
+		return nil
+	}
+	d := NewDispatcher(pool, publish, 100, time.Second)
+
+	if _, err := d.pollOnce(context.Background()); err != nil {
+		t.Fatalf("first pollOnce: %v", err)
+	}
+	assertDispatched(t, pool, id, false)
+
+	n, err := d.pollOnce(context.Background())
+	if err != nil {
+		t.Fatalf("second pollOnce: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected the retried record to dispatch on the second poll, got %d", n)
+	}
+	assertDispatched(t, pool, id, true)
+}
+
+// TestPollOnceBreaksCreatedAtTiesBySeq pins deterministic ordering for two
+// rows on the same aggregate sharing an identical created_at: insertion
+// order (seq) must decide, not database-undefined tie ordering.
+func TestPollOnceBreaksCreatedAtTiesBySeq(t *testing.T) {
+	pool := newTestPool(t)
+	aggregateID := uuid.New()
+	base := time.Now().UTC()
+	id1 := insertOutboxRowForAggregate(t, pool, aggregateID, "trip.requested", base)
+	id2 := insertOutboxRowForAggregate(t, pool, aggregateID, "trip.quoted", base)
+
+	var published []uuid.UUID
+	publish := func(ctx context.Context, r OutboxRecord) error {
+		published = append(published, r.ID)
+		return nil
+	}
+	d := NewDispatcher(pool, publish, 100, time.Second)
+
+	// Same aggregate: at most one row claims per pollOnce, so drive two rounds.
+	if _, err := d.pollOnce(context.Background()); err != nil {
+		t.Fatalf("first pollOnce: %v", err)
+	}
+	if _, err := d.pollOnce(context.Background()); err != nil {
+		t.Fatalf("second pollOnce: %v", err)
+	}
+
+	if len(published) != 2 || published[0] != id1 || published[1] != id2 {
+		t.Fatalf("expected [%s %s] in insertion order despite equal created_at, got %v", id1, id2, published)
+	}
+}
+
+// TestConcurrentPollOnceNeverClaimsSameAggregateTwice pins the cross-instance
+// ordering fix: while one dispatcher's claimed row for an aggregate is still
+// being handled, a second dispatcher instance must not claim any other row
+// for that same aggregate.
+func TestConcurrentPollOnceNeverClaimsSameAggregateTwice(t *testing.T) {
+	pool := newTestPool(t)
+	aggregateID := uuid.New()
+	base := time.Now().UTC()
+	id1 := insertOutboxRowForAggregate(t, pool, aggregateID, "trip.requested", base)
+	insertOutboxRowForAggregate(t, pool, aggregateID, "trip.quoted", base.Add(time.Second))
+
+	handlerStarted := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	publish := func(ctx context.Context, r OutboxRecord) error {
+		if r.ID == id1 {
+			startOnce.Do(func() { close(handlerStarted) })
+			<-release
+		}
+		return nil
+	}
+	d1 := NewDispatcher(pool, publish, 100, time.Second)
+	d2 := NewDispatcher(pool, publish, 100, time.Second)
+
+	done1 := make(chan struct{})
+	go func() {
+		defer close(done1)
+		if _, err := d1.pollOnce(context.Background()); err != nil {
+			t.Errorf("d1 pollOnce: %v", err)
+		}
+	}()
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("d1's handler did not start")
+	}
+
+	n2, err := d2.pollOnce(context.Background())
+	if err != nil {
+		t.Fatalf("d2 pollOnce: %v", err)
+	}
+	if n2 != 0 {
+		t.Fatalf("expected d2 to claim nothing while d1 has the same aggregate in flight, got %d", n2)
+	}
+
+	close(release)
+	select {
+	case <-done1:
+	case <-time.After(time.Second):
+		t.Fatal("d1 pollOnce did not return")
+	}
+}
+
+// TestSlowHandlerDoesNotBlockOtherAggregates pins the fix for the
+// lock-contention bug: the original single-transaction pollOnce locked
+// every selected row (across all aggregates) for the whole batch's publish
+// loop, so a slow handler for one aggregate starved dispatch of unrelated
+// aggregates too. A second dispatcher instance must still be able to claim
+// and dispatch an unrelated aggregate's row while the first is stuck.
+func TestSlowHandlerDoesNotBlockOtherAggregates(t *testing.T) {
+	pool := newTestPool(t)
+	base := time.Now().UTC()
+	slowID := insertOutboxRow(t, pool, "trip.requested", base)
+	otherID := insertOutboxRow(t, pool, "trip.requested", base.Add(time.Second))
+
+	handlerStarted := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	publish := func(ctx context.Context, r OutboxRecord) error {
+		if r.ID == slowID {
+			startOnce.Do(func() { close(handlerStarted) })
+			<-release
+		}
+		return nil
+	}
+	// d1's batch size is capped to 1 so it claims only the slow aggregate's
+	// row, leaving the unrelated aggregate's row for d2 to claim itself --
+	// otherwise d1 would claim both in one poll and d2 would correctly see
+	// nothing left, which wouldn't exercise the lock-contention fix at all.
+	d1 := NewDispatcher(pool, publish, 1, time.Second)
+	d2 := NewDispatcher(pool, publish, 100, time.Second)
+
+	done1 := make(chan struct{})
+	go func() {
+		defer close(done1)
+		if _, err := d1.pollOnce(context.Background()); err != nil {
+			t.Errorf("d1 pollOnce: %v", err)
+		}
+	}()
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("d1's handler did not start")
+	}
+
+	done2 := make(chan struct{})
+	go func() {
+		defer close(done2)
+		n, err := d2.pollOnce(context.Background())
+		if err != nil {
+			t.Errorf("d2 pollOnce: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("expected d2 to dispatch the unrelated aggregate's row, got %d", n)
+		}
+	}()
+
+	select {
+	case <-done2:
+	case <-time.After(time.Second):
+		t.Fatal("d2 pollOnce blocked on an unrelated aggregate's slow handler")
+	}
+	assertDispatched(t, pool, otherID, true)
+
+	close(release)
+	select {
+	case <-done1:
+	case <-time.After(time.Second):
+		t.Fatal("d1 pollOnce did not return")
+	}
+	assertDispatched(t, pool, slowID, true)
 }
 
 func TestDispatcherRunPublishesAndReturnsCanceledOnCancel(t *testing.T) {

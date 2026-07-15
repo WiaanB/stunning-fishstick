@@ -6,8 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"taxi-platform/internal/platform/eventbus"
+	"taxi-platform/internal/platform/postgres"
 )
 
 // fakePinger is a hand-rolled double for the structural Ping interface
@@ -171,6 +175,31 @@ func TestCloseInOrderClosesSequentially(t *testing.T) {
 }
 
 // --- getEnvOrDefault -------------------------------------------------------
+
+// TestPublishToBusWaitsForHandlerCompletion pins that publishToBus hands
+// records to the bus synchronously (via Dispatch), not fire-and-forget (via
+// Publish) — the outbox dispatcher only acks a row once its PublishFunc
+// returns, so an async hand-off here would recreate the ack-before-handler
+// bug even though pollOnce itself is now correct.
+func TestPublishToBusWaitsForHandlerCompletion(t *testing.T) {
+	bus := eventbus.New(1, 1)
+	defer bus.Close()
+
+	var handlerRan atomic.Bool
+	bus.Subscribe("trip.requested", func(_ context.Context, _ eventbus.Event) error {
+		time.Sleep(20 * time.Millisecond)
+		handlerRan.Store(true)
+		return nil
+	})
+
+	publish := publishToBus(bus)
+	if err := publish(context.Background(), postgres.OutboxRecord{EventType: "trip.requested"}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if !handlerRan.Load() {
+		t.Fatal("expected the handler to have run before publishToBus's PublishFunc returned")
+	}
+}
 
 func TestGetEnvOrDefaultUnset(t *testing.T) {
 	t.Setenv("API_TEST_VAR", "")

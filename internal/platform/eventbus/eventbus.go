@@ -32,7 +32,7 @@ type Bus struct {
 	queue        chan job
 	wg           sync.WaitGroup
 	closed       bool
-	errMu        sync.Mutex
+	closeMu      sync.RWMutex
 	errorHandler func(eventType string, err error)
 }
 
@@ -107,13 +107,17 @@ func (b *Bus) Subscribe(eventType string, h Handler) {
 // Publish enqueues events for async dispatch. It blocks only if the queue
 // is full, which is treated as backpressure rather than an error. After the
 // bus has been closed, Publish returns ErrBusClosed.
+//
+// closeMu is held as a read-lock for the whole check-then-send section so a
+// concurrent Close cannot close b.queue between the closed check and the
+// send — Close only needs the write-lock for that instant, not for the
+// worker drain that follows.
 func (b *Bus) Publish(ctx context.Context, events ...Event) error {
-	b.errMu.Lock()
+	b.closeMu.RLock()
+	defer b.closeMu.RUnlock()
 	if b.closed {
-		b.errMu.Unlock()
 		return ErrBusClosed
 	}
-	b.errMu.Unlock()
 
 	for _, e := range events {
 		select {
@@ -125,17 +129,42 @@ func (b *Bus) Publish(ctx context.Context, events ...Event) error {
 	return nil
 }
 
+// Dispatch runs the registered handlers for e synchronously on the calling
+// goroutine, bypassing the worker queue entirely, and returns once every
+// handler has completed. Use this instead of Publish when a caller (like
+// the outbox dispatcher) must know handlers actually ran, not just that the
+// event was enqueued, before considering the event delivered.
+func (b *Bus) Dispatch(ctx context.Context, e Event) error {
+	b.closeMu.RLock()
+	defer b.closeMu.RUnlock()
+	if b.closed {
+		return ErrBusClosed
+	}
+
+	b.mu.RLock()
+	handlers := b.handlers[e.EventType()]
+	b.mu.RUnlock()
+
+	var errs []error
+	for _, h := range handlers {
+		if err := h(ctx, e); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // Close stops accepting new events and waits for in-flight handlers to
 // finish. Safe to call multiple times; subsequent calls are no-ops.
 func (b *Bus) Close() {
-	b.errMu.Lock()
+	b.closeMu.Lock()
 	if b.closed {
-		b.errMu.Unlock()
+		b.closeMu.Unlock()
 		return
 	}
 	b.closed = true
-	b.errMu.Unlock()
-
 	close(b.queue)
+	b.closeMu.Unlock()
+
 	b.wg.Wait()
 }

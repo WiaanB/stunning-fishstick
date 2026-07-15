@@ -13,10 +13,12 @@ import (
 // interface.
 //
 // Save takes ownership of persisting both the trip row and the events
-// accumulated on it since the last save (via t.PendingEvents()) as a single
+// accumulated on it since the last save (read via t.Events()) as a single
 // atomic unit — e.g. one row write plus one outbox insert in the same DB
 // transaction. There is no separate publish step, so no real implementation
-// can persist one without the other.
+// can persist one without the other. Save must call t.ClearEvents() only
+// after that transaction commits, never before — draining on read would
+// lose the events for good if the transaction then failed.
 type Repository interface {
 	Save(ctx context.Context, t *Trip) error
 	FindByID(ctx context.Context, id uuid.UUID) (*Trip, error)
