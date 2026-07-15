@@ -1,6 +1,7 @@
 # TDD Rewrite of Existing Backend Packages
-Status: In Progress
+Status: Done
 Date: 2026-07-08
+Completed: 2026-07-15
 
 ## TLDR
 Delete and reimplement every existing Go package under strict red-green-refactor TDD, preserving
@@ -19,13 +20,16 @@ Recommended sequencing:
 1. **Done** — [[tdd-rewrite-eventbus]] and [[tdd-rewrite-trip-domain]], no external dependencies,
    straightforward unit testing, nothing else blocked on a decision.
 2. **Done** — [[tdd-rewrite-cmd-mockclient]], also dependency-free, `httptest`-friendly.
-3. [[tdd-rewrite-cmd-api]] next — partially testable via `httptest`, partially needs the wiring
-   decomposed to be testable at all. Its own ticket depends on postgres/eventbus interfaces being
-   settled; eventbus is done, and since the postgres-platform rewrite is scoped as test-coverage
-   only (no interface changes), cmd/api can reasonably proceed before wave 4 rather than waiting
-   on it — confirm this reading when cmd/api's turn comes.
-4. [[tdd-rewrite-postgres-platform]] last — Postgres integration-test strategy decided:
-   `testcontainers-go` (real disposable Postgres per test run). Implementation still open.
+3. **Done** — [[tdd-rewrite-cmd-api]]. Confirmed its "postgres interfaces settled" dependency was
+   already satisfied (postgres-platform's rewrite doesn't change interfaces), so this proceeded
+   ahead of wave 4 as anticipated.
+4. **Done** — [[tdd-rewrite-postgres-platform]], the last package. Added `testcontainers-go` as a
+   new dependency (`go.mod`/`go.sum`, the latter previously missing entirely); one Postgres
+   container per package test run via `TestMain`, `migrations/0001_init.sql` applied as its init
+   script so test and real schema can't drift.
+
+All four packages in this initiative are now rewritten test-first. See [[Backend Scaffolding]] for
+current file pointers.
 
 ## Related
 - [[tdd-rewrite-trip-domain]]

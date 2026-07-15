@@ -1,6 +1,7 @@
 # TDD Rewrite: internal/platform/postgres
-Status: Raised
+Status: Done
 Date: 2026-07-08
+Completed: 2026-07-15
 
 ## TLDR
 Delete and rebuild `internal/platform/postgres/{pool.go,outbox.go}` test-first — **blocked** on
@@ -36,6 +37,26 @@ Requirements to preserve:
   queued handler runs loses the event silently. This is consistent with the documented plan to
   swap the bus for something durable later; note it as a known limitation rather than folding a
   fix into this ticket's scope.
+
+## Resolution
+- Added `github.com/testcontainers/testcontainers-go` and its `modules/postgres` package as new
+  dependencies (also generated `go.sum`, which the repo had never had).
+- `internal/platform/postgres/main_test.go`: `TestMain` starts one `postgres:16-alpine` container
+  per package test run (not per test), applying `migrations/0001_init.sql` as its init script via
+  `postgres.WithInitScripts` — test and real schema can never drift apart. Uses
+  `postgres.BasicWaitStrategies()` so tests don't start before Postgres has actually finished
+  initializing (the container logs readiness twice due to its own internal restart).
+- No `*testing.T` is available in `TestMain`, so Docker's health is checked directly there (same
+  check `testcontainers.SkipIfProviderIsNotHealthy` uses internally) and stored in a package-level
+  `dockerAvailable` flag; each DB-touching test calls `newTestPool(t)`, which skips the test via
+  `t.Skip` if Docker isn't available, rather than gating the whole package behind a build tag.
+  `go test ./...` remains the single command that runs everything.
+- `newTestPool`/`truncateTables` give each test a clean `trips`/`outbox_events` state regardless of
+  run order, without needing a fresh container per test.
+- `pool.go`/`outbox.go` preserved exactly as before (no pool-tuning config added, per this
+  session's decision) — the rewrite added coverage, not new behavior.
+- Known limitation documented in `outbox.go`'s `Dispatcher` doc comment, not fixed: "dispatched"
+  only means hand-off to the in-process bus succeeded, not that a handler ran.
 
 ## Related
 - [[tdd-rewrite-initiative]]

@@ -49,6 +49,11 @@ type PublishFunc func(ctx context.Context, r OutboxRecord) error
 // PublishFunc, marking it dispatched once that call succeeds. Failed
 // publishes are left undispatched and retried on the next poll — delivery
 // is at-least-once, so downstream handlers must be idempotent.
+//
+// "Dispatched" only means hand-off to the in-process bus succeeded, not
+// that a handler actually ran — a crash after commit but before the queued
+// handler runs loses the event silently. Known limitation, consistent with
+// the documented plan to swap the bus for something durable later.
 type Dispatcher struct {
 	pool      *pgxpool.Pool
 	publish   PublishFunc

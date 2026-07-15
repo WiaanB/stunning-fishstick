@@ -1,6 +1,7 @@
 # TDD Rewrite: cmd/api
-Status: Raised
+Status: Done
 Date: 2026-07-08
+Completed: 2026-07-15
 
 ## TLDR
 Delete and rebuild `cmd/api/main.go` test-first, decomposing the process wiring enough that its
@@ -34,7 +35,25 @@ and a real listener, and TDD that in isolation. Pure construction/wiring lines (
 own.
 
 Depends on [[tdd-rewrite-postgres-platform]] and [[tdd-rewrite-eventbus]] having settled
-interfaces first.
+interfaces first. Resolved at implementation time: postgres-platform's rewrite is scoped as
+test-coverage-only (no interface changes to `NewPool`/`OutboxRecord`/`PublishFunc`/`Dispatcher`),
+so this proceeded ahead of that rewrite rather than waiting on it.
+
+## Resolution
+Rebuilt test-first in `cmd/api/main_test.go`. `healthHandler` unchanged behaviorally, now with
+httptest-based 200/503 tests. Extracted three previously-inline pieces of `run()` into named,
+unit-tested functions, all wiring order and observable behavior preserved exactly:
+- `awaitShutdown(ctx, shutdown, serverErrs, dispatcherErrs)` — the shutdown-branch `select`,
+  tested with plain channels and a fake `shutdown` func.
+- `closeInOrder(closers ...interface{ Close() })` — makes the `bus.Close()`-before-`pool.Close()`
+  ordering explicit instead of relying on implicit `defer` LIFO order; tested with recording fake
+  closers.
+- `getEnvOrDefault(key, fallback string) string` — the `DATABASE_URL`/`API_ADDR` defaulting
+  pattern, deduplicated into one tested helper.
+
+Pure construction/wiring (pool/bus/dispatcher setup, starting goroutines) left untested as
+"trivial glue," per the TDD skill. No real HTTP-listener or real-Postgres test added — deferred to
+[[tdd-rewrite-postgres-platform]], consistent with this repo having no test DB/CI yet.
 
 ## Related
 - [[tdd-rewrite-initiative]]
